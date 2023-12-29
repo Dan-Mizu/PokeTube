@@ -15,13 +15,68 @@
 	"youtubePlaylistLimit": 50,
 	"permissions": {
 		"banned": [],
-		"guest": ["writeChat", "addVideo", "removeVideo", "changeOrder", "toggleItemType", "requestLeader", "rewind"],
+		"guest": [
+			"writeChat",
+			"addVideo",
+			"removeVideo",
+			"changeOrder",
+			"toggleItemType",
+			"requestLeader",
+			"rewind"
+		],
 		"user": ["guest"],
 		"leader": ["user"],
 		"admin": ["user", "clearChat", "setLeader", "lockPlaylist", "banClient"]
 	},
 	"emotes": [
-		{"name": "pokeCOZY", "image": "https://static-cdn.jtvnw.net/emoticons/v2/300427569/default/dark/4.0"}
+		{
+			"name": "pokeCOZY",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/300427569/default/dark/1.0"
+		},
+		{
+			"name": "pokeAYAYA",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/300427568/default/dark/1.0"
+		},
+		{
+			"name": "pokeCRY",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/300427572/default/dark/1.0"
+		},
+		{
+			"name": "pokeHI",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/300427580/default/dark/1.0"
+		},
+		{
+			"name": "pokeFAT",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/300427577/default/dark/1.0"
+		},
+		{
+			"name": "pokeEZ",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/300427574/default/dark/1.0"
+		},
+		{
+			"name": "pokeL",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/300427589/default/dark/1.0"
+		},
+		{
+			"name": "pokeLAUGH",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/300427588/default/dark/1.0"
+		},
+		{
+			"name": "pokeREE",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/300731124/default/dark/1.0"
+		},
+		{
+			"name": "pokeSMOKE",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/300427595/default/dark/1.0"
+		},
+		{
+			"name": "pokeScoots",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_500296cfc7ff42eb81ac356d6c5b6757/default/dark/1.0"
+		},
+		{
+			"name": "pokeING",
+			"image": "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_808e37e07e4a450cb32da34cce2f8d73/default/dark/1.0"
+		}
 	],
 	"filters": [
 		{

@@ -1,16 +1,18 @@
 package client;
 
+import Types.UploadResponse;
+import Types.WsEvent;
 import client.Main.ge;
 import haxe.Timer;
+import haxe.io.Path;
 import js.Browser.document;
 import js.Browser.window;
 import js.html.Element;
 import js.html.ImageElement;
 import js.html.InputElement;
 import js.html.KeyboardEvent;
+import js.html.TransitionEvent;
 import js.html.VisualViewport;
-
-using StringTools;
 
 class Buttons {
 	static inline var CHAT_MIN_SIZE = 200;
@@ -22,7 +24,13 @@ class Buttons {
 		if (settings.isSwapped) swapPlayerAndChat();
 		initSplit();
 		setSplitSize(settings.chatSize);
-		initChatInput(main);
+		initChatInputs(main);
+
+		for (item in settings.checkboxes) {
+			if (item.checked == null) continue;
+			final checkbox:InputElement = ge('#${item.id}') ?? continue;
+			checkbox.checked = item.checked;
+		}
 
 		final passIcon = ge("#guestpass_icon");
 		passIcon.onclick = e -> {
@@ -45,13 +53,15 @@ class Buttons {
 			if (list.children.length == 0) return;
 			final isActive = smilesBtn.classList.toggle("active");
 			if (isActive) {
-				wrap.style.display = "block";
-				wrap.style.height = outerHeight(list) + "px";
+				wrap.style.display = "";
+				wrap.style.height = Utils.outerHeight(list) + "px";
 			} else {
 				wrap.style.height = "0";
-				wrap.addEventListener("transitionend", e -> {
+				function onTransitionEnd(e:TransitionEvent):Void {
+					if (e.propertyName != "height") return;
 					wrap.style.display = "none";
-				}, {once: true});
+					wrap.removeEventListener("transitionend", onTransitionEnd);
+				}
 			}
 			if (list.firstElementChild.dataset.src == null) return;
 			for (child in list.children) {
@@ -61,22 +71,15 @@ class Buttons {
 		}
 
 		final scrollToChatEndBtn = ge("#scroll-to-chat-end");
-		function scrollToChatEndBtnAnim():Void {
-			if (scrollToChatEndBtn.style.opacity == "0") return;
-			scrollToChatEndBtn.style.opacity = "0";
-			scrollToChatEndBtn.addEventListener("transitionend", e -> {
-				scrollToChatEndBtn.style.display = "none";
-			}, {once: true});
-		}
 		scrollToChatEndBtn.onclick = e -> {
 			main.scrollChatToEnd();
-			scrollToChatEndBtnAnim();
+			main.hideScrollToChatEndBtn();
 		}
 		// hide scroll button when chat is scrolled to the end
 		final msgBuf = ge("#messagebuffer");
 		msgBuf.onscroll = e -> {
-			if (msgBuf.offsetHeight + msgBuf.scrollTop < msgBuf.scrollHeight - 1) return;
-			scrollToChatEndBtnAnim();
+			if (!main.isInChatEnd(1)) return;
+			main.hideScrollToChatEndBtn();
 		}
 
 		ge("#clearchatbtn").onclick = e -> {
@@ -110,9 +113,9 @@ class Buttons {
 			final style = ge("#userlist").style;
 			if (isHidden) {
 				icon.setAttribute("name", "chevron-down");
-				style.display = "block";
+				style.display = "";
 				final list = wrap.firstElementChild;
-				wrap.style.height = outerHeight(list) + "px";
+				wrap.style.height = "15vh";
 				wrap.style.marginBottom = "1rem";
 			} else {
 				icon.setAttribute("name", "chevron-forward");
@@ -128,7 +131,7 @@ class Buttons {
 		else {
 			final wrap = ge("#userlist-wrap");
 			final list = wrap.firstElementChild;
-			wrap.style.height = outerHeight(list) + "px";
+			wrap.style.height = "15vh";
 		}
 		// enable animation after page loads
 		Timer.delay(() -> {
@@ -157,6 +160,7 @@ class Buttons {
 		final fullscreenBtn = ge("#fullscreenbtn");
 		fullscreenBtn.onclick = e -> {
 			if ((Utils.isTouch() || main.isVerbose()) && !Utils.hasFullscreen()) {
+				window.scrollTo(0, 0);
 				Utils.requestFullscreen(document.documentElement);
 			} else {
 				Utils.requestFullscreen(ge("#ytapiplayer"));
@@ -215,15 +219,19 @@ class Buttons {
 
 		final mediaUrl:InputElement = cast ge("#mediaurl");
 		mediaUrl.oninput = () -> {
-			final value = mediaUrl.value;
-			final isRawSingleVideo = value != "" && main.isRawPlayerLink(value)
-				&& main.isSingleVideoLink(value);
-			ge("#mediatitleblock").style.display = isRawSingleVideo ? "" : "none";
-			ge("#subsurlblock").style.display = isRawSingleVideo ? "" : "none";
+			final url = mediaUrl.value;
+			final playerType = main.getLinkPlayerType(url);
+			final isSingle = main.isSingleVideoUrl(url);
+			final isSingleRawVideo = url != "" && playerType == RawType && isSingle;
+			ge("#mediatitleblock").style.display = isSingleRawVideo ? "" : "none";
+			ge("#subsurlblock").style.display = isSingleRawVideo ? "" : "none";
+			ge("#voiceoverblock").style.display = (url.length > 0 && isSingle) ? "" : "none";
+			final showCache = isSingle && main.playersCacheSupport.contains(playerType);
+			ge("#cache-on-server").parentElement.style.display = showCache ? "" : "none";
 			final panel = ge("#addfromurl");
 			final oldH = panel.style.height; // save for animation
 			panel.style.height = ""; // to calculate height from content
-			final newH = outerHeight(panel) + "px";
+			final newH = Utils.outerHeight(panel) + "px";
 			panel.style.height = oldH;
 			Timer.delay(() -> panel.style.height = newH, 0);
 		}
@@ -232,6 +240,60 @@ class Buttons {
 		ge("#insert_template").onclick = e -> {
 			mediaUrl.value = main.getTemplateUrl();
 			mediaUrl.focus();
+		}
+
+		ge("#mediaurl-upload").onclick = e -> {
+			Utils.browseFile((buffer, name) -> {
+				if (name == null || name.length == 0) name = "video";
+
+				// send last chunk separately to allow server file streaming while uploading
+				final chunkSize = 1024 * 1024 * 5; // 5 MB
+				if (buffer.byteLength > chunkSize) {
+					final lastChunk = buffer.slice(buffer.byteLength - chunkSize);
+					window.fetch("/upload-last-chunk", {
+						method: "POST",
+						headers: {
+							"content-name": Path.withoutExtension(name),
+							"client-name": main.getName(),
+						},
+						body: lastChunk,
+					});
+				}
+
+				// send full file
+				final request = window.fetch("/upload", {
+					method: "POST",
+					headers: {
+						"content-name": Path.withoutExtension(name),
+						"client-name": main.getName(),
+					},
+					body: buffer,
+				});
+				request.then(e -> {
+					e.json().then((data:UploadResponse) -> {
+						trace(data.info);
+						if (data.errorId == null) return;
+						main.serverMessage(data.info, true, false);
+					});
+				}).catchError(err -> {
+					trace(err);
+					Timer.delay(() -> {
+						main.hideDynamicChin();
+					}, 500);
+				});
+
+				// set file url to input after upload starts
+				function onStartUpload(event:WsEvent):Void {
+					if (event.type != Progress) return;
+					final data = event.progress;
+					if (data.type != Uploading) return;
+					if (data.data == null) return;
+					final input:InputElement = ge("#mediaurl");
+					input.value = data.data;
+					JsApi.off(Progress, onStartUpload);
+				}
+				JsApi.on(Progress, onStartUpload);
+			});
 		}
 
 		final showOptions = ge("#showoptions");
@@ -246,9 +308,9 @@ class Buttons {
 
 		final exitBtn = ge("#exitBtn");
 		exitBtn.onclick = e -> {
+			showOptions.onclick();
 			if (main.isUser()) main.send({type: Logout});
 			else ge("#guestname").focus();
-			toggleGroup(showOptions);
 		}
 
 		final swapLayoutBtn = ge("#swapLayoutBtn");
@@ -277,16 +339,11 @@ class Buttons {
 		} else {
 			final list = target.firstElementChild;
 			if (target.style.height == "") target.style.height = "0";
-			target.style.height = outerHeight(list) + "px";
+			Timer.delay(() -> {
+				target.style.height = Utils.outerHeight(list) + "px";
+			}, 0);
 		}
 		return el.classList.toggle("active");
-	}
-
-	static function outerHeight(el:Element):Float {
-		final style = window.getComputedStyle(el);
-		return (el.getBoundingClientRect().height
-			+ Std.parseFloat(style.marginTop)
-			+ Std.parseFloat(style.marginBottom));
 	}
 
 	static function swapPlayerAndChat():Void {
@@ -362,7 +419,7 @@ class Buttons {
 		}
 		final selectLocalVideoBtn = ge("#selectLocalVideoBtn");
 		selectLocalVideoBtn.onclick = e -> {
-			Utils.browseFileUrl((url:String, name:String) -> {
+			Utils.browseFileUrl((url, name) -> {
 				JsApi.setVideoSrc(url);
 			});
 		}
@@ -374,7 +431,7 @@ class Buttons {
 		ge("#getplaylist").title += " (Alt-C)";
 		ge("#fullscreenbtn").title += " (Alt-F)";
 		ge("#leader_btn").title += " (Alt-L)";
-		window.onkeydown = function(e:KeyboardEvent) {
+		window.onkeydown = (e:KeyboardEvent) -> {
 			if (!settings.hotkeysEnabled) return;
 			final target:Element = cast e.target;
 			if (isElementEditable(target)) return;
@@ -421,7 +478,7 @@ class Buttons {
 		ge("#hotkeysBtn").innerText = '$text: $state';
 	}
 
-	static function initChatInput(main:Main):Void {
+	static function initChatInputs(main:Main):Void {
 		final guestName:InputElement = cast ge("#guestname");
 		guestName.onkeydown = e -> {
 			if (e.keyCode == KeyCode.Return) {
@@ -439,37 +496,24 @@ class Buttons {
 			}
 		}
 
-		if (Utils.isIOS()) {
-			document.ontouchmove = e -> {
-				e.preventDefault();
-			}
-			document.body.style.height = "-webkit-fill-available";
-			ge("#chat").style.height = "-webkit-fill-available";
-		}
 		final chatline:InputElement = cast ge("#chatline");
 		chatline.onfocus = e -> {
 			if (Utils.isIOS()) {
-				final startY = window.scrollY;
+				// final startY = window.scrollY;
+				final startY = 0;
 				Timer.delay(() -> {
 					window.scrollBy(0, -(window.scrollY - startY));
 					ge("#video").scrollTop = 0;
 					main.scrollChatToEnd();
-					if (getVisualViewport() == null) { // ios < 13
-						ge("#chat").style.height = '${window.innerHeight}px';
-					}
 				}, 100);
-			} else if (Utils.isTouch()) main.scrollChatToEnd();
-		}
-		if (Utils.isIOS() && getVisualViewport() != null) {
-			final viewport = getVisualViewport();
-			viewport.addEventListener("resize", e -> {
-				ge("#chat").style.height = '${window.innerHeight}px';
-			});
-		}
-		chatline.onblur = e -> {
-			if (Utils.isIOS() && getVisualViewport() == null) { // ios < 13
-				ge("#chat").style.height = "-webkit-fill-available";
+			} else if (Utils.isTouch()) {
+				main.scrollChatToEnd();
 			}
+		}
+		final viewport = getVisualViewport();
+		if (viewport != null) {
+			viewport.addEventListener("resize", e -> onViewportResize());
+			onViewportResize();
 		}
 		new InputWithHistory(chatline, 50, value -> {
 			if (main.handleCommands(value)) return true;
@@ -483,6 +527,28 @@ class Buttons {
 			if (Utils.isTouch()) chatline.blur();
 			return true;
 		});
+		final checkboxes:Array<InputElement> = [
+			ge("#add-temp"),
+			ge("#cache-on-server"),
+		];
+		for (checkbox in checkboxes) {
+			checkbox.addEventListener("change", () -> {
+				final checked = checkbox.checked;
+				final item = settings.checkboxes.find(item -> item.id == checkbox.id);
+				settings.checkboxes.remove(item);
+				settings.checkboxes.push({id: checkbox.id, checked: checked});
+				Settings.write(settings);
+			});
+		}
+	}
+
+	public static function onViewportResize():Void {
+		final viewport = getVisualViewport() ?? return;
+		final isPortrait = window.innerHeight > window.innerWidth;
+		final playerH = ge("#ytapiplayer").offsetHeight;
+		var h = viewport.height - playerH;
+		if (!isPortrait) h = viewport.height;
+		ge("#chat").style.height = '${h}px';
 	}
 
 	static inline function getVisualViewport():Null<VisualViewport> {

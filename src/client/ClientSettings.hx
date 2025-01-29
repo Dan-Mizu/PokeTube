@@ -2,6 +2,7 @@ package client;
 
 typedef ClientSettings = {
 	version:Int,
+	uuid:Null<String>,
 	name:String,
 	hash:String,
 	isExtendedPlayer:Bool,
@@ -13,5 +14,6 @@ typedef ClientSettings = {
 	latestLinks:Array<String>,
 	latestSubs:Array<String>,
 	hotkeysEnabled:Bool,
-	showHintList:Bool
+	showHintList:Bool,
+	checkboxes:Array<{id:String, checked:Null<Bool>}>,
 }

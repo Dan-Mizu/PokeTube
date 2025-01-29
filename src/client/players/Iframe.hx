@@ -1,5 +1,6 @@
 package client.players;
 
+import Types.PlayerType;
 import Types.VideoData;
 import Types.VideoDataRequest;
 import Types.VideoItem;
@@ -18,13 +19,17 @@ class Iframe implements IPlayer {
 		this.player = player;
 	}
 
+	public function getPlayerType():PlayerType {
+		return IframeType;
+	}
+
 	public function isSupportedLink(url:String):Bool {
 		return true;
 	}
 
 	public function getVideoData(data:VideoDataRequest, callback:(data:VideoData) -> Void):Void {
 		final iframe = document.createDivElement();
-		iframe.innerHTML = data.url;
+		iframe.innerHTML = data.url.trim();
 		if (isValidIframe(iframe)) {
 			callback({duration: 99 * 60 * 60});
 		} else {
@@ -34,13 +39,13 @@ class Iframe implements IPlayer {
 
 	function isValidIframe(iframe:Element):Bool {
 		if (iframe.children.length != 1) return false;
-		return (iframe.firstChild.nodeName == "IFRAME" || iframe.firstChild.nodeName == "OBJECT");
+		return (iframe.firstChild.nodeName == "IFRAME"
+			|| iframe.firstChild.nodeName == "OBJECT");
 	}
 
 	public function loadVideo(item:VideoItem):Void {
 		removeVideo();
 		video = document.createDivElement();
-		video.id = "videoplayer";
 		video.innerHTML = item.url; // actually data
 		if (!isValidIframe(video)) {
 			video = null;
@@ -49,6 +54,7 @@ class Iframe implements IPlayer {
 		if (video.firstChild.nodeName == "IFRAME") {
 			video.setAttribute("sandbox", "allow-scripts");
 		}
+		video.firstElementChild.id = "videoplayer";
 		playerEl.appendChild(video);
 	}
 
@@ -66,6 +72,10 @@ class Iframe implements IPlayer {
 
 	public function pause():Void {}
 
+	public function isPaused():Bool {
+		return false;
+	}
+
 	public function getTime():Float {
 		return 0;
 	}
@@ -77,4 +87,12 @@ class Iframe implements IPlayer {
 	}
 
 	public function setPlaybackRate(rate:Float):Void {}
+
+	public function getVolume():Float {
+		return 1;
+	}
+
+	public function setVolume(volume:Float) {}
+
+	public function unmute():Void {}
 }

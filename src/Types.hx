@@ -2,17 +2,31 @@ package;
 
 import Client.ClientData;
 
+enum abstract PlayerType(String) {
+	var RawType;
+	var YoutubeType;
+	var VkType;
+	var IframeType;
+}
+
 typedef VideoDataRequest = {
-	url:String,
-	atEnd:Bool
+	final url:String;
+	final atEnd:Bool;
+}
+
+typedef UploadResponse = {
+	info:String,
+	?url:String,
+	?errorId:String,
 }
 
 typedef VideoData = {
-	duration:Float,
-	?title:String,
-	?url:String,
-	?subs:String,
-	?isIframe:Bool
+	final duration:Float;
+	var ?title:String;
+	var ?url:String;
+	var ?subs:String;
+	var ?voiceOverTrack:String;
+	var ?playerType:PlayerType;
 }
 
 typedef Config = {
@@ -24,12 +38,14 @@ typedef Config = {
 	totalVideoLimit:Int,
 	userVideoLimit:Int,
 	requestLeaderOnPause:Bool,
+	unpauseWithoutLeader:Bool,
 	localAdmins:Bool,
 	allowProxyIps:Bool,
 	localNetworkOnly:Bool,
 	templateUrl:String,
 	youtubeApiKey:String,
 	youtubePlaylistLimit:Int,
+	cacheStorageLimitGiB:Float,
 	permissions:Permissions,
 	emotes:Array<Emote>,
 	filters:Array<Filter>,
@@ -97,19 +113,59 @@ typedef Message = {
 	time:String
 }
 
+enum abstract ProgressType(String) {
+	var Caching;
+	var Downloading;
+	var Uploading;
+}
+
+@:using(Types.VideoItemTools)
 typedef VideoItem = {
+	/** Immutable, used as identifier for skipping / removing items **/
+	final url:String;
+	var title:String;
+	var author:String;
+	var duration:Float;
+	var ?subs:String;
+	var ?voiceOverTrack:String;
+	var isTemp:Bool;
+	var doCache:Bool;
+	var playerType:PlayerType;
+}
+
+private class VideoItemTools {
+	public static function withUrl(item:VideoItem, url:String):VideoItem {
+		return {
+			url: url,
+			title: item.title,
+			author: item.author,
+			duration: item.duration,
+			subs: item.subs,
+			voiceOverTrack: item.voiceOverTrack,
+			isTemp: item.isTemp,
+			doCache: item.doCache,
+			playerType: item.playerType
+		};
+	}
+}
+
+typedef FlashbackItem = {
 	url:String,
-	title:String,
-	author:String,
 	duration:Float,
-	?subs:String,
-	isTemp:Bool,
-	isIframe:Bool
+	time:Float
+}
+
+typedef GetTimeEvent = {
+	time:Float,
+	?paused:Bool,
+	?pausedByServer:Bool,
+	?rate:Float
 }
 
 typedef WsEvent = {
 	type:WsEventType,
 	?connected:{
+		uuid:String,
 		config:Config,
 		history:Array<Message>,
 		clients:Array<ClientData>,
@@ -118,7 +174,8 @@ typedef WsEvent = {
 		videoList:Array<VideoItem>,
 		isPlaylistOpen:Bool,
 		itemPos:Int,
-		globalIp:String
+		globalIp:String,
+		playersCacheSupport:Array<PlayerType>,
 	},
 	?login:{
 		clientName:String,
@@ -137,6 +194,11 @@ typedef WsEvent = {
 	},
 	?serverMessage:{
 		textId:String
+	},
+	?progress:{
+		type:ProgressType,
+		ratio:Float,
+		?data:String
 	},
 	?updateClients:{
 		clients:Array<ClientData>,
@@ -164,11 +226,7 @@ typedef WsEvent = {
 	?play:{
 		time:Float
 	},
-	?getTime:{
-		time:Float,
-		?paused:Bool,
-		?rate:Float
-	},
+	?getTime:GetTimeEvent,
 	?setTime:{
 		time:Float
 	},
@@ -198,7 +256,7 @@ typedef WsEvent = {
 	},
 	?dump:{
 		data:String
-	}
+	},
 }
 
 enum abstract WsEventType(String) {
@@ -210,9 +268,8 @@ enum abstract WsEventType(String) {
 	var Logout;
 	var Message;
 	var ServerMessage;
+	var Progress;
 	var UpdateClients;
-	// var AddClient;
-	// var RemoveClient;
 	var BanClient;
 	var KickClient;
 	var AddVideo;

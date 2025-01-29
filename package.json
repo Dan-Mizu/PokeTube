@@ -17,6 +17,9 @@
   },
   "homepage": "https://github.com/RblSb/SyncTube#readme",
   "dependencies": {
-    "ws": "^8.16.0"
+    "ws": "^8.17.1"
+  },
+  "engines": {
+    "node": ">=14.17.0"
   }
 }

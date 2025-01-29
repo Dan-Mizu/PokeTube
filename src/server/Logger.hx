@@ -6,9 +6,6 @@ import haxe.io.Path;
 import sys.FileSystem;
 import sys.io.File;
 
-using Lambda;
-using StringTools;
-
 class Logger {
 	final folder:String;
 	final maxCount:Int;
@@ -58,7 +55,11 @@ class Logger {
 	}
 
 	function removeOldestLog(folder:String):Void {
-		final names = FileSystem.readDirectory(folder);
+		final names = FileSystem.readDirectory(folder).filter(name -> {
+			if (FileSystem.isDirectory('$folder/$name')) return false;
+			if (name.startsWith(".")) return false;
+			return name.endsWith(".json");
+		});
 		if (names.count(item -> matchFileFormat.match(item)) < maxCount) return;
 		var minDate = 0.0;
 		var fileName:String = null;

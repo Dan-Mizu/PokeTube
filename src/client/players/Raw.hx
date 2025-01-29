@@ -1,5 +1,6 @@
 package client.players;
 
+import Types.PlayerType;
 import Types.VideoData;
 import Types.VideoDataRequest;
 import Types.VideoItem;
@@ -12,8 +13,6 @@ import js.html.Element;
 import js.html.InputElement;
 import js.html.URL;
 import js.html.VideoElement;
-
-using StringTools;
 
 class Raw implements IPlayer {
 	final main:Main;
@@ -30,6 +29,10 @@ class Raw implements IPlayer {
 	public function new(main:Main, player:Player) {
 		this.main = main;
 		this.player = player;
+	}
+
+	public function getPlayerType():PlayerType {
+		return RawType;
 	}
 
 	public function isSupportedLink(url:String):Bool {
@@ -59,6 +62,7 @@ class Raw implements IPlayer {
 		final subs = subsInput.value.trim();
 		subsInput.value = "";
 		final video = document.createVideoElement();
+		video.id = "temp-videoplayer";
 		video.src = url;
 		video.onerror = e -> {
 			if (playerEl.contains(video)) playerEl.removeChild(video);
@@ -69,10 +73,10 @@ class Raw implements IPlayer {
 			callback({
 				duration: video.duration,
 				title: title,
-				subs: subs
+				subs: subs,
 			});
 		}
-		Utils.prepend(playerEl, video);
+		playerEl.prepend(video);
 		if (isHls) initHlsSource(video, url);
 	}
 
@@ -93,7 +97,7 @@ class Raw implements IPlayer {
 
 	public function loadVideo(item:VideoItem):Void {
 		final url = main.tryLocalIp(item.url);
-		final isHls = item.url.contains("m3u8") || item.title.endsWith("m3u8");
+		final isHls = url.contains("m3u8") || item.title.endsWith("m3u8");
 		if (isHls && !isHlsLoaded) {
 			loadHlsPlugin(() -> loadVideo(item));
 			return;
@@ -117,6 +121,7 @@ class Raw implements IPlayer {
 			}
 			video.onpause = player.onPause;
 			video.onratechange = player.onRateChange;
+			if (!main.isAutoplayAllowed()) video.muted = true;
 			playerEl.appendChild(video);
 		}
 		if (isHls) initHlsSource(video, url);
@@ -135,7 +140,7 @@ class Raw implements IPlayer {
 		final subsUri = try {
 			new URL(subsUrl);
 		} catch (e) {
-			Main.serverMessage('Failed to add subs: bad url ($subsUrl)');
+			Main.instance.serverMessage('Failed to add subs: bad url ($subsUrl)');
 			return;
 		}
 		// make local url as relative path to skip proxy
@@ -187,6 +192,10 @@ class Raw implements IPlayer {
 		video.pause();
 	}
 
+	public function isPaused():Bool {
+		return video.paused;
+	}
+
 	public function getTime():Float {
 		return video.currentTime;
 	}
@@ -201,5 +210,17 @@ class Raw implements IPlayer {
 
 	public function setPlaybackRate(rate:Float):Void {
 		video.playbackRate = rate;
+	}
+
+	public function getVolume():Float {
+		return video.volume;
+	}
+
+	public function setVolume(volume:Float):Void {
+		video.volume = volume;
+	}
+
+	public function unmute():Void {
+		video.muted = false;
 	}
 }

@@ -7,12 +7,14 @@
 	"totalVideoLimit": 0,
 	"userVideoLimit": 0,
 	"requestLeaderOnPause": false,
+	"unpauseWithoutLeader": false,
 	"localAdmins": true,
 	"allowProxyIps": true,
 	"localNetworkOnly": false,
 	"templateUrl": "https://youtube.com/playlist?list=PL3Er1-kJaoGkza9CNegAQtko4VbrAo235&si=RPOD1UkYjuNxgPn9",
 	"youtubeApiKey": "AIzaSyDTk1OPRI9cDkAK_BKsBcv10DQCHse-QaA",
 	"youtubePlaylistLimit": 50,
+	"cacheStorageLimitGiB": 3.0,
 	"permissions": {
 		"banned": [],
 		"guest": [

@@ -2,8 +2,6 @@ package;
 
 import Types.VideoItem;
 
-using Lambda;
-
 class VideoList {
 	public var length(get, never):Int;
 	public var pos(default, null) = 0;
@@ -17,11 +15,13 @@ class VideoList {
 		return items.length;
 	}
 
-	public inline function getCurrentItem():VideoItem {
+	public var currentItem(get, never):Null<VideoItem>;
+
+	inline function get_currentItem():Null<VideoItem> {
 		return items[pos];
 	}
 
-	public inline function getItem(i:Int):VideoItem {
+	public inline function getItem(i:Int):Null<VideoItem> {
 		return items[i];
 	}
 

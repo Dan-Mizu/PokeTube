@@ -1,5 +1,6 @@
 package server;
 
+import Types.FlashbackItem;
 import Types.Message;
 import Types.VideoItem;
 
@@ -10,5 +11,7 @@ typedef ServerState = {
 	messages:Array<Message>,
 	timer:{
 		time:Float, paused:Bool
-	}
+	},
+	?flashbacks:Array<FlashbackItem>,
+	?cachedFiles:Array<String>,
 }

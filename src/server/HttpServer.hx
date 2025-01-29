@@ -1,8 +1,10 @@
 package server;
 
+import Types.UploadResponse;
+import haxe.Json;
 import haxe.io.Path;
 import js.node.Buffer;
-import js.node.Fs;
+import js.node.Fs.Fs;
 import js.node.Http;
 import js.node.Https;
 import js.node.Path as JsPath;
@@ -12,7 +14,13 @@ import js.node.http.ServerResponse;
 import js.node.url.URL;
 import sys.FileSystem;
 
-using StringTools;
+@:structInit
+private class HttpServerConfig {
+	public final dir:String;
+	public final customDir:String = null;
+	public final allowLocalRequests = false;
+	public final cache:Cache = null;
+}
 
 class HttpServer {
 	static final mimeTypes = [
@@ -21,13 +29,16 @@ class HttpServer {
 		"css" => "text/css",
 		"json" => "application/json",
 		"png" => "image/png",
-		"jpg" => "image/jpg",
+		"jpg" => "image/jpeg",
+		"jpeg" => "image/jpeg",
 		"gif" => "image/gif",
+		"webp" => "image/webp",
 		"svg" => "image/svg+xml",
 		"ico" => "image/x-icon",
 		"wav" => "audio/wav",
 		"mp3" => "audio/mpeg",
 		"mp4" => "video/mp4",
+		"webm" => "video/webm",
 		"woff" => "application/font-woff",
 		"ttf" => "application/font-ttf",
 		"eot" => "application/vnd.ms-fontobject",
@@ -35,29 +46,48 @@ class HttpServer {
 		"wasm" => "application/wasm"
 	];
 
-	static var dir:String;
-	static var customDir:String;
-	static var hasCustomRes = false;
-	static var allowedLocalFiles:Map<String, Bool> = [];
-	static var allowLocalRequests = false;
+	final main:Main;
+	final dir:String;
+	final customDir:String;
+	final hasCustomRes = false;
+	final allowedLocalFiles:Map<String, Bool> = [];
+	final allowLocalRequests = false;
+	final cache:Cache = null;
+	final CHUNK_SIZE = 1024 * 1024 * 5; // 5 MB
+	final uploadingFiles:Map<String, Int> = [];
+	final uploadingFilesLastChunks:Map<String, Buffer> = [];
 
-	public static function init(dir:String, ?customDir:String, allowLocalRequests:Bool):Void {
-		HttpServer.dir = dir;
-		if (customDir == null) return;
-		HttpServer.customDir = customDir;
-		hasCustomRes = FileSystem.exists(customDir);
-		HttpServer.allowLocalRequests = allowLocalRequests;
+	public function new(main:Main, config:HttpServerConfig):Void {
+		this.main = main;
+		dir = config.dir;
+		customDir = config.customDir;
+		allowLocalRequests = config.allowLocalRequests;
+		cache = config.cache;
+
+		if (customDir != null) hasCustomRes = FileSystem.exists(customDir);
 	}
 
-	public static function serveFiles(req:IncomingMessage, res:ServerResponse):Void {
+	public function serveFiles(req:IncomingMessage, res:ServerResponse):Void {
 		final url = try {
 			new URL(safeDecodeURI(req.url), "http://localhost");
-		} catch (e) new URL("/", "http://localhost");
+		} catch (e) {
+			new URL("/", "http://localhost");
+		}
 		var filePath = getPath(dir, url);
 		final ext = Path.extension(filePath).toLowerCase();
 
 		res.setHeader("Accept-Ranges", "bytes");
 		res.setHeader("Content-Type", getMimeType(ext));
+
+		if (cache != null && req.method == "POST") {
+			switch url.pathname {
+				case "/upload-last-chunk":
+					uploadFileLastChunk(req, res);
+				case "/upload":
+					uploadFile(req, res);
+			}
+			return;
+		}
 
 		if (allowLocalRequests && req.socket.remoteAddress == req.socket.localAddress
 			|| allowedLocalFiles[url.pathname]) {
@@ -101,14 +131,105 @@ class HttpServer {
 		});
 	}
 
-	static function getPath(dir:String, url:URL):String {
+	function uploadFileLastChunk(req:IncomingMessage, res:ServerResponse) {
+		final name = cache.getFreeFileName(req.headers["content-name"]);
+		final filePath = cache.getFilePath(name);
+		final body:Array<Any> = [];
+		req.on("data", chunk -> body.push(chunk));
+		req.on("end", () -> {
+			final buffer = Buffer.concat(body);
+			uploadingFilesLastChunks[filePath] = buffer;
+			res.writeHead(200, {
+				'Content-Type': 'application/json',
+			});
+			final json:UploadResponse = {
+				info: "File last chunk uploaded"
+			}
+			res.end(Json.stringify(json));
+		});
+	}
+
+	function uploadFile(req:IncomingMessage, res:ServerResponse) {
+		final name = cache.getFreeFileName(req.headers["content-name"]);
+		final clientName = req.headers["client-name"];
+		final filePath = cache.getFilePath(name);
+		final size = Std.parseInt(req.headers["content-length"]) ?? return;
+		var written = 0;
+
+		inline function end(json:UploadResponse):Void {
+			uploadingFiles.remove(name);
+			uploadingFilesLastChunks.remove(name);
+
+			res.statusCode = 200;
+			res.end(Json.stringify(json));
+		}
+
+		if (cache.getFreeSpace() < size) {
+			end({
+				info: "Error: Not enough free space on server or file size is out of cache storage limit.",
+				errorId: "freeSpace"
+			});
+			return;
+		}
+
+		final stream = Fs.createWriteStream(filePath);
+		req.pipe(stream);
+
+		inline function onStart() {
+			cache.removeOlderCache(size);
+			cache.add(name);
+			uploadingFiles[filePath] = size;
+		}
+		var isStart = true;
+		req.on("data", chunk -> {
+			var url:String = null;
+			if (isStart) {
+				isStart = false;
+				onStart();
+				url = cache.getFileUrl(name);
+			}
+			written += chunk.length;
+			final ratio = (written / size).clamp(0, 1);
+			final percent = (ratio * 100).toFixed(2);
+			final client = main.clients.getByName(clientName) ?? return;
+			main.send(client, {
+				type: Progress,
+				progress: {
+					type: Uploading,
+					ratio: ratio,
+					data: url
+				}
+			});
+		});
+		stream.on("close", () -> {
+			end({
+				info: "File write stream closed.",
+			});
+		});
+		stream.on("error", err -> {
+			trace(err);
+			end({
+				info: "File write stream error.",
+			});
+		});
+		req.on("error", err -> {
+			trace("Request Error:", err);
+			stream.destroy();
+			end({
+				info: "File request error.",
+			});
+		});
+	}
+
+	function getPath(dir:String, url:URL):String {
 		var filePath = dir + url.pathname;
 		filePath = filePath.urlDecode();
 		if (!FileSystem.isDirectory(filePath)) return filePath;
 		return Path.addTrailingSlash(filePath) + "index.html";
 	}
 
-	static function readFileError(err:Dynamic, res:ServerResponse, filePath:String):Void {
+	function readFileError(err:Dynamic, res:ServerResponse, filePath:String):Void {
+		res.setHeader("Content-Type", getMimeType("html"));
 		if (err.code == "ENOENT") {
 			res.statusCode = 404;
 			var rel = JsPath.relative(dir, filePath);
@@ -119,46 +240,72 @@ class HttpServer {
 		}
 	}
 
-	static function serveMedia(req:IncomingMessage, res:ServerResponse, filePath:String):Bool {
+	function serveMedia(req:IncomingMessage, res:ServerResponse, filePath:String):Bool {
 		if (!Fs.existsSync(filePath)) return false;
-		final videoSize = Fs.statSync(filePath).size;
-		var range:String = req.headers["range"];
-		if (range == null) {
+		var videoSize:Int = cast Fs.statSync(filePath).size;
+		// use future content length to start playing it before uploaded
+		if (uploadingFiles.exists(filePath)) {
+			videoSize = uploadingFiles[filePath];
+		}
+		final rangeHeader:String = req.headers["range"];
+		if (rangeHeader == null) {
 			res.statusCode = 200;
 			res.setHeader("Content-Length", '$videoSize');
 			final videoStream = Fs.createReadStream(filePath);
 			videoStream.pipe(res);
+			res.on("error", () -> videoStream.destroy());
+			res.on("close", () -> videoStream.destroy());
 			return true;
 		}
-		// if (range == null) range = "bytes=0-";
-		final ranges = ~/[-=]/g.split(range);
-		var start = Std.parseFloat(ranges[1]);
-		if (Utils.isOutOfRange(start, 0, videoSize - 1)) start = 0;
-		final CHUNK_SIZE = 1024 * 1024 * 5; // 5 MB
-		var end = Std.parseFloat(ranges[2]);
-		if (Math.isNaN(end)) end = start + CHUNK_SIZE;
-		if (Utils.isOutOfRange(end, start, videoSize - 1)) end = videoSize - 1;
+		final range = parseRangeHeader(rangeHeader, videoSize);
+		final start = range.start;
+		final end = range.end;
 		final contentLength = end - start + 1;
 
-		res.setHeader("Content-Range", 'bytes ${start}-${end}/${videoSize}');
+		res.setHeader("Content-Range", 'bytes $start-$end/$videoSize');
 		res.setHeader("Content-Length", '$contentLength');
-		// HTTP Status 206 for Partial Content
-		res.statusCode = 206;
-		// create video read stream for this particular chunk
-		final videoStream = Fs.createReadStream(filePath, {start: cast start, end: cast end});
+		res.statusCode = 206; // partial content
+
+		// check for last chunk cache for instant play while uploading
+		final buffer = uploadingFilesLastChunks[filePath];
+		if (buffer != null && end == videoSize - 1 && contentLength < buffer.byteLength) {
+			final bufferStart = (buffer.byteLength - contentLength).limitMin(0);
+			res.end(buffer.slice(bufferStart));
+			return true;
+		}
+
 		// stream the video chunk to the client
+		final videoStream = Fs.createReadStream(
+			filePath,
+			{start: start, end: end}
+		);
 		videoStream.pipe(res);
+		res.on("error", () -> videoStream.destroy());
+		res.on("close", () -> videoStream.destroy());
 		return true;
 	}
 
-	static function isMediaExtension(ext:String):Bool {
-		return ext == "mp4" || ext == "mp3" || ext == "wav";
+	function parseRangeHeader(rangeHeader:String, videoSize:Int):{start:Int, end:Int} {
+		final ranges = ~/[-=]/g.split(rangeHeader);
+		var start = Std.parseInt(ranges[1]);
+		if (Utils.isOutOfRange(start, 0, videoSize - 1)) start = 0;
+		var end = Std.parseInt(ranges[2]);
+		if (end == null) end = start + CHUNK_SIZE;
+		if (Utils.isOutOfRange(end, start, videoSize - 1)) end = videoSize - 1;
+		return {
+			start: start,
+			end: end
+		};
 	}
 
-	static final matchLang = ~/^[A-z]+/;
-	static final matchVarString = ~/\${([A-z_]+)}/g;
+	function isMediaExtension(ext:String):Bool {
+		return ext == "mp4" || ext == "webm" || ext == "mp3" || ext == "wav";
+	}
 
-	static function localizeHtml(data:String, lang:String):String {
+	final matchLang = ~/^[A-z]+/;
+	final matchVarString = ~/\${([A-z_]+)}/g;
+
+	function localizeHtml(data:String, lang:String):String {
 		if (lang != null && matchLang.match(lang)) {
 			lang = matchLang.matched(0);
 		} else lang = "en";
@@ -169,31 +316,34 @@ class HttpServer {
 		return data;
 	}
 
-	static function proxyUrl(req:IncomingMessage, res:ServerResponse):Bool {
+	function proxyUrl(req:IncomingMessage, res:ServerResponse):Bool {
 		final url = req.url.replace("/proxy?url=", "");
-		final proxy = proxyRequest(url, req, res, proxyReq -> {
-			final url = proxyReq.headers["location"];
-			if (url == null) return false;
-			final proxy2 = proxyRequest(url, req, res, proxyReq -> false);
+		final proxy = proxyRequest(url, req, res, proxyRes -> {
+			final url = proxyRes.headers["location"] ?? return false;
+			final proxy2 = proxyRequest(url, req, res, proxyRes -> false);
 			if (proxy2 == null) {
 				res.end('Proxy error: multiple redirects for url $url');
 				return true;
 			}
-			req.pipe(proxy2, {end: true});
+			req.pipe(proxy2);
 			return true;
 		});
 		if (proxy == null) return false;
-		req.pipe(proxy, {end: true});
+		req.pipe(proxy);
 		return true;
 	}
 
-	static function proxyRequest(
-		url:String, req:IncomingMessage, res:ServerResponse,
-		fn:(req:IncomingMessage) -> Bool
+	function proxyRequest(
+		url:String,
+		req:IncomingMessage,
+		res:ServerResponse,
+		cancelProxyRequest:(proxyRes:IncomingMessage) -> Bool
 	):Null<ClientRequest> {
 		final url = try {
 			new URL(safeDecodeURI(url));
-		} catch (e) return null;
+		} catch (e) {
+			return null;
+		}
 		if (url.host == req.headers["host"]) return null;
 		final options = {
 			host: url.hostname,
@@ -201,12 +351,14 @@ class HttpServer {
 			path: url.pathname + url.search,
 			method: req.method
 		};
+		req.headers["referer"] = url.toString();
+		req.headers["host"] = url.hostname;
 		final request = url.protocol == "https:" ? Https.request : Http.request;
-		final proxy = request(options, proxyReq -> {
-			if (fn(proxyReq)) return;
-			proxyReq.headers["Content-Type"] = "application/octet-stream";
-			res.writeHead(proxyReq.statusCode, proxyReq.headers);
-			proxyReq.pipe(res, {end: true});
+		final proxy = request(options, proxyRes -> {
+			if (cancelProxyRequest(proxyRes)) return;
+			proxyRes.headers["content-type"] = "application/octet-stream";
+			res.writeHead(proxyRes.statusCode, proxyRes.headers);
+			proxyRes.pipe(res);
 		});
 		proxy.on("error", err -> {
 			res.end('Proxy error: ${url.href}');
@@ -214,18 +366,18 @@ class HttpServer {
 		return proxy;
 	}
 
-	static function isChildOf(parent:String, child:String):Bool {
+	function isChildOf(parent:String, child:String):Bool {
 		final rel = JsPath.relative(parent, child);
 		return rel.length > 0 && !rel.startsWith('..') && !JsPath.isAbsolute(rel);
 	}
 
-	static function getMimeType(ext:String):String {
+	function getMimeType(ext:String):String {
 		return mimeTypes[ext] ?? return "application/octet-stream";
 	}
 
-	static final ctrlCharacters = ~/[\u0000-\u001F\u007F-\u009F\u2000-\u200D\uFEFF]/g;
+	final ctrlCharacters = ~/[\u0000-\u001F\u007F-\u009F\u2000-\u200D\uFEFF]/g;
 
-	static function safeDecodeURI(data:String):String {
+	function safeDecodeURI(data:String):String {
 		try {
 			data = decodeURI(data);
 		} catch (err) {
@@ -235,7 +387,7 @@ class HttpServer {
 		return data;
 	}
 
-	static inline function decodeURI(data:String):String {
+	inline function decodeURI(data:String):String {
 		return js.Syntax.code("decodeURI({0})", data);
 	}
 }
